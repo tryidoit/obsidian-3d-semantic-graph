@@ -48,8 +48,10 @@ export class InsightsPanel {
 		this.app = app;
 		this.callbacks = callbacks;
 
-		this.rootEl = parentEl.createDiv({ cls: "semantic-graph-insights" });
-		this.rootEl.hide();
+		this.rootEl = parentEl.createDiv({
+			cls: "semantic-graph-insights",
+			attr: { "aria-hidden": "true" },
+		});
 
 		const header = this.rootEl.createDiv({ cls: "semantic-graph-insights-header" });
 		header.createSpan({ text: t("insights.title") });
@@ -87,7 +89,8 @@ export class InsightsPanel {
 	show(): void {
 		if (this.open) return;
 		this.open = true;
-		this.rootEl.show();
+		this.rootEl.classList.add("is-open");
+		this.rootEl.setAttribute("aria-hidden", "false");
 		this.computeAndRender();
 		this.callbacks.onVisibilityChange(true);
 	}
@@ -95,11 +98,19 @@ export class InsightsPanel {
 	hide(): void {
 		if (!this.open) return;
 		this.open = false;
-		this.rootEl.hide();
+		this.computeRequestId++;
+		this.rootEl.classList.remove("is-open");
+		this.rootEl.setAttribute("aria-hidden", "true");
 		this.callbacks.onVisibilityChange(false);
 	}
 
 	dispose(): void {
+		this.computeRequestId++;
+		this.open = false;
+		this.data = null;
+		this.computed = null;
+		this.fetchedEmbeddings = null;
+		this.computingStatusEl = null;
 		this.rootEl.remove();
 	}
 
@@ -127,25 +138,36 @@ export class InsightsPanel {
 		let duplicates: DuplicatePair[] = [];
 
 		this.showComputing();
-		const embeddings = await getEmbeddings();
-		if (requestId !== this.computeRequestId) return;
-		this.fetchedEmbeddings = embeddings;
-
-		if (embeddings && embeddings.size >= 2 && embeddings.size <= MAX_PAIRWISE_NODES) {
-			const result = await computePairInsights(embeddings, graphData.links, maxSuggestions, {
-				signals: this.data.signals,
-				onProgress: (done, total) => {
-					if (requestId === this.computeRequestId && total > 0) {
-						this.computingStatusEl?.setText(
-							t("insights.computing", { percent: Math.round((done / total) * 100) })
-						);
-					}
-				},
-			});
-			// A newer setData() superseded this run while it was yielding.
+		try {
+			const embeddings = await getEmbeddings();
 			if (requestId !== this.computeRequestId) return;
-			suggestions = result.suggestions;
-			duplicates = result.duplicates;
+			this.fetchedEmbeddings = embeddings;
+
+			if (embeddings && embeddings.size >= 2 && embeddings.size <= MAX_PAIRWISE_NODES) {
+				const result = await computePairInsights(embeddings, graphData.links, maxSuggestions, {
+					signals: this.data.signals,
+					onProgress: (done, total) => {
+						if (requestId === this.computeRequestId && total > 0) {
+							this.computingStatusEl?.setText(
+								t("insights.computing", { percent: Math.round((done / total) * 100) })
+							);
+						}
+					},
+				});
+				// A newer setData() superseded this run while it was yielding.
+				if (requestId !== this.computeRequestId) return;
+				suggestions = result.suggestions;
+				duplicates = result.duplicates;
+			}
+		} catch (error) {
+			if (requestId !== this.computeRequestId) return;
+			this.computingStatusEl = null;
+			this.bodyEl.empty();
+			this.bodyEl.createDiv({
+				cls: "semantic-graph-insights-hint",
+				text: t("insights.failed", { message: error instanceof Error ? error.message : String(error) }),
+			});
+			return;
 		}
 
 		this.computed = { suggestions, duplicates, orphans };
@@ -269,7 +291,7 @@ export class InsightsPanel {
 			attr: { type: "button", "aria-label": t("insights.insertLinkAria") },
 		});
 		setIcon(insertBtn, "link");
-		insertBtn.addEventListener("click", () => void this.insertLink(suggestion, row));
+		insertBtn.addEventListener("click", () => void this.insertLink(suggestion, row, insertBtn));
 	}
 
 	private createSection(title: string, description: string): HTMLElement {
@@ -297,7 +319,13 @@ export class InsightsPanel {
 		return file.endsWith(".md") ? file.slice(0, -3) : file;
 	}
 
-	private async insertLink(suggestion: SuggestedLink, row: HTMLElement): Promise<void> {
+	private async insertLink(
+		suggestion: SuggestedLink,
+		row: HTMLElement,
+		button: HTMLButtonElement
+	): Promise<void> {
+		if (button.disabled) return;
+		button.disabled = true;
 		try {
 			const sourceFile = this.app.vault.getAbstractFileByPath(suggestion.source);
 			const targetFile = this.app.vault.getAbstractFileByPath(suggestion.target);
@@ -321,6 +349,7 @@ export class InsightsPanel {
 				this.callbacks.onSuggestions(this.computed.suggestions);
 			}
 		} catch (error) {
+			button.disabled = false;
 			new Notice(t("notice.linkFailed", { message: error instanceof Error ? error.message : String(error) }));
 		}
 	}

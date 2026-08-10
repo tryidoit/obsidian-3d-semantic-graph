@@ -1,8 +1,8 @@
 export class PcaReducer {
-	reduce(
+	async reduce(
 		embeddings: number[][],
 		onProgress?: (step: number, totalSteps: number) => void
-	): number[][] {
+	): Promise<number[][]> {
 		const sampleCount = embeddings.length;
 		if (sampleCount === 0) return [];
 		if (sampleCount === 1) return [[0, 0, 0]];
@@ -36,6 +36,7 @@ export class PcaReducer {
 
 				vector = next;
 				onProgress?.(componentIndex * iterations + iteration + 1, componentCount * iterations);
+				if (iteration % 6 === 5) await yieldToEventLoop();
 			}
 
 			basis.push(vector);
@@ -132,4 +133,8 @@ export class PcaReducer {
 		}
 		return sum;
 	}
+}
+
+function yieldToEventLoop(): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, 0));
 }

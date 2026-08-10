@@ -5,7 +5,7 @@ export default tseslint.config(
 	...tseslint.configs.recommendedTypeChecked,
 	...obsidianmd.configs.recommended,
 	{
-		files: ["src/**/*.ts"],
+		files: ["src/**/*.ts", "tests/**/*.ts"],
 		languageOptions: {
 			parserOptions: {
 				project: "./tsconfig.json",

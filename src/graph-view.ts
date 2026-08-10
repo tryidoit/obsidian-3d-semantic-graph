@@ -1,5 +1,14 @@
 import { ItemView, Notice, TFile, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
-import { canGenerateEmbeddings, clonePluginSettings, GraphData, GraphNode, GraphVisualOptions, PluginSettings } from "./types";
+import {
+	canGenerateEmbeddings,
+	canGenerateQueryEmbeddings,
+	clonePluginSettings,
+	GraphData,
+	GraphNode,
+	GraphVisualOptions,
+	getNodePath,
+	PluginSettings,
+} from "./types";
 import { createSeededRandom } from "./seeded-rng";
 import { buildGraphData } from "./graph-data";
 import { createClusteredSphereLayout, buildClusterRegions } from "./clustered-sphere-layout";
@@ -8,6 +17,7 @@ import { InsightsPanel } from "./insights-panel";
 import { SuggestedLink } from "./insights";
 import { SuggestionSegment } from "./graph-scene-renderer";
 import { t } from "./i18n";
+import { settingsRequireGraphReload } from "./settings-impact";
 
 export const VIEW_TYPE = "semantic-graph-3d";
 
@@ -17,7 +27,19 @@ const MIN_NODE_DISTANCE = 14;
 const TOOLTIP_DELAY_MS = 150;
 const TIMELINE_RESOLUTION = 1000;
 const TIMELINE_PLAY_DURATION_MS = 15000;
+const SETTINGS_RELOAD_DEBOUNCE_MS = 350;
 type ClustersMode = PluginSettings["showClusters"];
+
+interface EmbeddingMetadata {
+	provider: PluginSettings["embeddingProvider"] | "custom" | null;
+	model: string | null;
+	dimensions: number;
+}
+
+function embeddingDimensions(embeddings: Map<string, number[]>): number {
+	for (const vector of embeddings.values()) return vector.length;
+	return 0;
+}
 
 function clustersModeTooltip(mode: ClustersMode): string {
 	switch (mode) {
@@ -53,11 +75,17 @@ export class SemanticGraphView extends ItemView {
 	private timelineFrame: number | null = null;
 	private loadRequestId = 0;
 	private loadedEmbeddings: Map<string, number[]> | null = null;
+	private loadedEmbeddingMetadata: EmbeddingMetadata | null = null;
 	private embeddingsFetchPromise: Promise<Map<string, number[]> | null> | null = null;
 	private searchBtn: HTMLButtonElement | null = null;
 	private searchInput: HTMLInputElement | null = null;
 	private searchResultsEl: HTMLElement | null = null;
 	private searchRequestId = 0;
+	private settingsReloadTimer: number | null = null;
+	private metadataReloadTimer: number | null = null;
+	private loadPromise: Promise<void> | null = null;
+	private reloadRequested = false;
+	private disposed = false;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -78,6 +106,7 @@ export class SemanticGraphView extends ItemView {
 	getIcon(): string { return "network"; }
 
 	async onOpen(): Promise<void> {
+		this.disposed = false;
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("semantic-graph-container");
@@ -120,7 +149,11 @@ export class SemanticGraphView extends ItemView {
 		this.searchBtn.addEventListener("click", () => this.toggleSearch());
 		this.searchInput = this.toolbar.createEl("input", {
 			cls: "semantic-graph-search-input",
-			attr: { type: "text", placeholder: t("search.placeholder") },
+			attr: {
+				type: "text",
+				placeholder: t("search.placeholder"),
+				"aria-label": t("toolbar.search"),
+			},
 		});
 		this.searchInput.hide();
 		this.searchInput.addEventListener("keydown", (event) => {
@@ -191,6 +224,8 @@ export class SemanticGraphView extends ItemView {
 
 		this.statusEl = this.toolbar.createSpan({ cls: "semantic-graph-status" });
 		this.graphContainer = container.createDiv({ cls: "semantic-graph-canvas" });
+		this.graphContainer.setAttribute("role", "application");
+		this.graphContainer.setAttribute("aria-label", t("view.graph.title"));
 		this.graphStage = this.graphContainer.createDiv({ cls: "semantic-graph-stage" });
 		this.insightsPanel = new InsightsPanel(this.app, this.graphContainer, {
 			onOpenNote: (path) => this.openNote(path),
@@ -219,6 +254,7 @@ export class SemanticGraphView extends ItemView {
 				min: "0",
 				max: String(TIMELINE_RESOLUTION),
 				value: String(TIMELINE_RESOLUTION),
+				"aria-label": t("toolbar.timeline"),
 			},
 		});
 		this.timelineSlider.addEventListener("input", () => {
@@ -233,7 +269,10 @@ export class SemanticGraphView extends ItemView {
 				this.renderer.updateVisualOptions(this.getVisualOptions());
 			}
 		});
-		this.resizeObserver.observe(this.graphContainer);
+		// The stage itself changes width when the insights panel opens or closes.
+		// Observing the outer graph container misses that flex-child resize and
+		// leaves the WebGL canvas stretched across the panel, intercepting clicks.
+		this.resizeObserver.observe(this.graphStage);
 
 		this.registerEvent(
 			this.app.workspace.on("css-change", () => {
@@ -242,11 +281,26 @@ export class SemanticGraphView extends ItemView {
 				}
 			})
 		);
+		this.registerEvent(
+			this.app.metadataCache.on("resolved", () => this.scheduleMetadataReload())
+		);
 
 		await this.loadGraph();
 	}
 
 	onClose(): Promise<void> {
+		this.disposed = true;
+		this.loadRequestId++;
+		this.searchRequestId++;
+		this.reloadRequested = false;
+		if (this.settingsReloadTimer !== null) {
+			window.clearTimeout(this.settingsReloadTimer);
+			this.settingsReloadTimer = null;
+		}
+		if (this.metadataReloadTimer !== null) {
+			window.clearTimeout(this.metadataReloadTimer);
+			this.metadataReloadTimer = null;
+		}
 		this.resizeObserver?.disconnect();
 		this.stopTimelinePlayback();
 		this.insightsPanel?.dispose();
@@ -266,14 +320,25 @@ export class SemanticGraphView extends ItemView {
 		this.updateGridToggleButton();
 		this.updateClustersToggleButton();
 
-		if (
-			previous.projectionMethod !== settings.projectionMethod ||
-			previous.layoutSeed !== settings.layoutSeed ||
-			previous.timelineDateSource !== settings.timelineDateSource ||
-			previous.clusterSource !== settings.clusterSource
-		) {
-			void this.loadGraph();
+		if (settingsRequireGraphReload(previous, settings)) {
+			this.scheduleSettingsReload();
 		}
+	}
+
+	private scheduleSettingsReload(): void {
+		if (this.settingsReloadTimer !== null) window.clearTimeout(this.settingsReloadTimer);
+		this.settingsReloadTimer = window.setTimeout(() => {
+			this.settingsReloadTimer = null;
+			void this.loadGraph();
+		}, SETTINGS_RELOAD_DEBOUNCE_MS);
+	}
+
+	private scheduleMetadataReload(): void {
+		if (this.metadataReloadTimer !== null) window.clearTimeout(this.metadataReloadTimer);
+		this.metadataReloadTimer = window.setTimeout(() => {
+			this.metadataReloadTimer = null;
+			void this.loadGraph();
+		}, SETTINGS_RELOAD_DEBOUNCE_MS);
 	}
 
 	private setStatus(text: string): void {
@@ -384,11 +449,17 @@ export class SemanticGraphView extends ItemView {
 
 			const blob = new Blob([html], { type: "text/html" });
 			const url = URL.createObjectURL(blob);
-			const anchor = activeDocument.createEl("a");
+			const anchor = activeDocument.body.createEl("a");
 			anchor.href = url;
 			anchor.download = "semantic-graph.html";
+			anchor.hidden = true;
 			anchor.click();
-			URL.revokeObjectURL(url);
+			// Electron needs the detached navigation target to stay alive until it
+			// has accepted the download. Immediate revocation silently cancels it.
+			window.setTimeout(() => {
+				anchor.remove();
+				URL.revokeObjectURL(url);
+			}, 1_000);
 			new Notice(t("export.done"));
 		} catch (error) {
 			new Notice(t("export.failed", { message: error instanceof Error ? error.message : String(error) }));
@@ -532,13 +603,36 @@ export class SemanticGraphView extends ItemView {
 	}
 
 	async loadGraph(): Promise<void> {
+		if (this.disposed) return;
+		if (this.loadPromise) {
+			this.reloadRequested = true;
+			await this.loadPromise;
+			return;
+		}
+
+		this.loadPromise = (async () => {
+			do {
+				this.reloadRequested = false;
+				await this.performLoadGraph();
+			} while (this.reloadRequested && !this.disposed);
+		})();
+		try {
+			await this.loadPromise;
+		} finally {
+			this.loadPromise = null;
+		}
+	}
+
+	private async performLoadGraph(): Promise<void> {
 		if (!this.graphStage) return;
 		this.syncSettingsFromSource();
 		const settings = clonePluginSettings(this.settings);
 		const requestId = ++this.loadRequestId;
-		const isCurrentRequest = () => requestId === this.loadRequestId;
+		const isCurrentRequest = () => !this.disposed && requestId === this.loadRequestId;
 		this.loadedEmbeddings = null;
+		this.loadedEmbeddingMetadata = null;
 		this.embeddingsFetchPromise = null;
+		this.lastGraphData = null;
 		this.closeSearch();
 
 		try {
@@ -591,11 +685,25 @@ export class SemanticGraphView extends ItemView {
 						let embeddings: Map<string, number[]>;
 						let layoutFingerprint: string | null = null;
 						if (settings.uploadedVectorsFileName.trim()) {
-							embeddings = await this.loadUploadedEmbeddingVectors();
+							const uploaded = await this.loadUploadedEmbeddingVectors(
+								new Set(graphData.nodes.map((node) => node.path))
+							);
+							embeddings = uploaded.vectors;
+							layoutFingerprint = uploaded.fingerprint;
+							this.loadedEmbeddingMetadata = {
+								provider: uploaded.provider,
+								model: uploaded.model,
+								dimensions: uploaded.dimensions,
+							};
 						} else {
 							const loaded = await this.loadProviderEmbeddings(settings);
 							embeddings = loaded.embeddings;
 							layoutFingerprint = loaded.layoutFingerprint;
+							this.loadedEmbeddingMetadata = {
+								provider: settings.embeddingProvider,
+								model: settings.embeddingModel,
+								dimensions: embeddingDimensions(embeddings),
+							};
 						}
 						if (!isCurrentRequest()) return;
 						this.loadedEmbeddings = embeddings;
@@ -756,6 +864,7 @@ export class SemanticGraphView extends ItemView {
 		if (!this.graphContainer) return null;
 		if (!this.searchResultsEl) {
 			this.searchResultsEl = this.graphContainer.createDiv({ cls: "semantic-graph-search-results" });
+			this.searchResultsEl.setAttribute("role", "listbox");
 		}
 		return this.searchResultsEl;
 	}
@@ -764,8 +873,8 @@ export class SemanticGraphView extends ItemView {
 		const trimmed = query.trim();
 		if (!trimmed || !this.lastGraphData) return;
 		const settings = clonePluginSettings(this.settings);
-		if (!canGenerateEmbeddings(settings)) {
-			new Notice(t("insights.requiresEmbeddingsShort"));
+		if (!canGenerateQueryEmbeddings(settings)) {
+			new Notice(t("search.providerUnavailable"));
 			return;
 		}
 
@@ -782,11 +891,29 @@ export class SemanticGraphView extends ItemView {
 				this.clearSearchResults();
 				return;
 			}
+			if (
+				settings.uploadedVectorsFileName.trim()
+				&& (
+					this.loadedEmbeddingMetadata?.provider !== settings.embeddingProvider
+					|| this.loadedEmbeddingMetadata.model !== settings.embeddingModel
+				)
+			) {
+				new Notice(t("search.providerUnavailable"));
+				this.clearSearchResults();
+				return;
+			}
 
 			const { createEmbeddingProviderAdapter } = await import("./embedding-adapters");
 			const adapter = createEmbeddingProviderAdapter(settings);
-			const [queryVector] = await adapter.embed([trimmed]);
+			const [queryVector] = await adapter.embed([trimmed], { inputType: "query" });
 			if (requestId !== this.searchRequestId) return;
+			const dimensions = this.loadedEmbeddingMetadata?.dimensions
+				?? embeddingDimensions(embeddings);
+			if (dimensions === 0 || queryVector.length !== dimensions) {
+				new Notice(t("search.vectorDimensionMismatch"));
+				this.clearSearchResults();
+				return;
+			}
 
 			const { cosineSimilarity } = await import("./insights");
 			const nodePaths = new Set(this.lastGraphData.nodes.map((node) => node.path));
@@ -819,7 +946,10 @@ export class SemanticGraphView extends ItemView {
 			return;
 		}
 		for (const result of results) {
-			const row = resultsEl.createDiv({ cls: "semantic-graph-search-result" });
+			const row = resultsEl.createEl("button", {
+				cls: "semantic-graph-search-result",
+				attr: { type: "button", role: "option" },
+			});
 			const name = result.path.split("/").pop()?.replace(/\.md$/, "") ?? result.path;
 			row.createSpan({ cls: "semantic-graph-search-result-name", text: name });
 			row.createSpan({ cls: "semantic-graph-insights-score", text: `${Math.round(result.similarity * 100)}%` });
@@ -839,10 +969,13 @@ export class SemanticGraphView extends ItemView {
 		}
 		const neighbors = new Map<string, Set<string>>();
 		for (const link of graphData.links) {
-			if (!neighbors.has(link.source)) neighbors.set(link.source, new Set());
-			if (!neighbors.has(link.target)) neighbors.set(link.target, new Set());
-			neighbors.get(link.source)!.add(link.target);
-			neighbors.get(link.target)!.add(link.source);
+			const source = getNodePath(link.source);
+			const target = getNodePath(link.target);
+			if (!source || !target) continue;
+			if (!neighbors.has(source)) neighbors.set(source, new Set());
+			if (!neighbors.has(target)) neighbors.set(target, new Set());
+			neighbors.get(source)!.add(target);
+			neighbors.get(target)!.add(source);
 		}
 		return { tags, folders, neighbors };
 	}
@@ -858,12 +991,24 @@ export class SemanticGraphView extends ItemView {
 			this.embeddingsFetchPromise = (async () => {
 				try {
 					if (settings.uploadedVectorsFileName.trim()) {
-						const { readUploadedVectors } = await import("./uploaded-vectors");
-						return await readUploadedVectors(this.app, this.pluginDir);
+						const { readUploadedVectorsData } = await import("./uploaded-vectors");
+						const allowedPaths = new Set(this.lastGraphData?.nodes.map((node) => node.path) ?? []);
+						const uploaded = await readUploadedVectorsData(this.app, this.pluginDir, { allowedPaths });
+						this.loadedEmbeddingMetadata = {
+							provider: uploaded.provider,
+							model: uploaded.model,
+							dimensions: uploaded.dimensions,
+						};
+						return uploaded.vectors;
 					}
 					const { EmbeddingService } = await import("./embedding");
 					const service = new EmbeddingService(this.app, settings, this.pluginDir);
 					const cached = await service.loadCachedEmbeddings();
+					this.loadedEmbeddingMetadata = {
+						provider: settings.embeddingProvider,
+						model: settings.embeddingModel,
+						dimensions: embeddingDimensions(cached),
+					};
 					return cached.size > 0 ? cached : null;
 				} catch {
 					return null;
@@ -887,10 +1032,12 @@ export class SemanticGraphView extends ItemView {
 		return { embeddings, layoutFingerprint: embeddingService.getFingerprintFor(embeddings.keys()) };
 	}
 
-	private async loadUploadedEmbeddingVectors(): Promise<Map<string, number[]>> {
+	private async loadUploadedEmbeddingVectors(
+		allowedPaths: ReadonlySet<string>
+	): Promise<import("./uploaded-vectors").UploadedVectorsData> {
 		this.setStatus(t("status.loadingVectors"));
-		const { readUploadedVectors } = await import("./uploaded-vectors");
-		return readUploadedVectors(this.app, this.pluginDir);
+		const { readUploadedVectorsData } = await import("./uploaded-vectors");
+		return readUploadedVectorsData(this.app, this.pluginDir, { allowedPaths });
 	}
 
 	private createSphereLayout(
@@ -1071,7 +1218,7 @@ export class SemanticGraphView extends ItemView {
 		}
 	}
 
-	/** Push apart nodes closer than minDist */
+	/** Push apart nearby nodes using a spatial hash instead of an O(n²) full scan. */
 	private enforceMinDistance(
 		posMap: Map<string, [number, number, number]>,
 		minDist: number,
@@ -1081,9 +1228,24 @@ export class SemanticGraphView extends ItemView {
 		const entries = Array.from(posMap.entries());
 		for (let iter = 0; iter < maxIterations; iter++) {
 			let moved = false;
+			const cells = new Map<string, number[]>();
 			for (let i = 0; i < entries.length; i++) {
-				for (let j = i + 1; j < entries.length; j++) {
-					const [, a] = entries[i];
+				const [, point] = entries[i];
+				const key = this.spatialCellKey(point, minDist);
+				const bucket = cells.get(key);
+				if (bucket) bucket.push(i);
+				else cells.set(key, [i]);
+			}
+
+			for (let i = 0; i < entries.length; i++) {
+				const [, a] = entries[i];
+				const cellX = Math.floor(a[0] / minDist);
+				const cellY = Math.floor(a[1] / minDist);
+				const cellZ = Math.floor(a[2] / minDist);
+				for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) for (let oz = -1; oz <= 1; oz++) {
+					const nearby = cells.get(`${cellX + ox}|${cellY + oy}|${cellZ + oz}`) ?? [];
+					for (const j of nearby) {
+						if (j <= i) continue;
 					const [, b] = entries[j];
 					const dx = b[0] - a[0];
 					const dy = b[1] - a[1];
@@ -1104,16 +1266,22 @@ export class SemanticGraphView extends ItemView {
 						a[2] += (random() - 0.5) * minDist;
 						moved = true;
 					}
+					}
 				}
 			}
 			if (!moved) break;
 		}
 	}
 
+	private spatialCellKey(point: [number, number, number], cellSize: number): string {
+		return `${Math.floor(point[0] / cellSize)}|${Math.floor(point[1] / cellSize)}|${Math.floor(point[2] / cellSize)}`;
+	}
+
 	private showError(message: string): void {
 		if (!this.graphStage) return;
 		this.renderer?.dispose();
 		this.renderer = null;
+		this.lastGraphData = null;
 		this.graphStage.empty();
 		this.setStatus("");
 		this.graphStage.createDiv({ cls: "semantic-graph-error" })

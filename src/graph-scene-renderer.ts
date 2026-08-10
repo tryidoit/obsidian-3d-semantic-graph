@@ -96,6 +96,7 @@ export class GraphSceneRenderer {
 	private onNodeOpen: (node: GraphNode) => void;
 	private linksVisible = true;
 	private nodeObjects = new Map<string, THREE.Object3D>();
+	private readonly sharedNodeGeometry = new THREE.IcosahedronGeometry(1, 1);
 	private currentData: GraphData | null = null;
 	private adjacency = new Map<string, Set<string>>();
 	private selectedNodePath: string | null = null;
@@ -311,10 +312,8 @@ export class GraphSceneRenderer {
 		let requiresRefresh = false;
 
 		if (!this.graph) return;
-		if (previous.nodeSizeScale !== this.visualOptions.nodeSizeScale && this.currentData) {
-			this.render(this.currentData);
-			this.setLinksVisible(this.linksVisible);
-			return;
+		if (previous.nodeSizeScale !== this.visualOptions.nodeSizeScale) {
+			this.syncNodeScale();
 		}
 
 		if (previous.dragSensitivity !== this.visualOptions.dragSensitivity) {
@@ -349,6 +348,7 @@ export class GraphSceneRenderer {
 
 	dispose(): void {
 		this.disposeGraph();
+		this.sharedNodeGeometry.dispose();
 		this.container.removeEventListener("pointerdown", this.handlePointerDown);
 		this.container.removeEventListener("pointerup", this.handlePointerUp);
 		this.container.removeEventListener("pointerleave", this.handlePointerLeave);
@@ -460,13 +460,13 @@ export class GraphSceneRenderer {
 		const object = this.createSphereNode(node);
 		object.userData.path = node.path;
 		object.userData.baseColor = node.color;
+		object.userData.baseSize = node.size;
 		this.nodeObjects.set(node.path, object);
 		return object;
 	}
 
 	private createSphereNode(node: GraphNode): THREE.Mesh {
 		const radius = Math.max(1.5, node.size * SPHERE_SIZE_MULTIPLIER * this.visualOptions.nodeSizeScale);
-		const geometry = new THREE.IcosahedronGeometry(radius, 2);
 		const material = new THREE.MeshStandardMaterial({
 			color: node.color,
 			roughness: 0.34,
@@ -474,7 +474,18 @@ export class GraphSceneRenderer {
 			transparent: true,
 			opacity: this.getNodeOpacity(node.path),
 		});
-		return new THREE.Mesh(geometry, material);
+		const mesh = new THREE.Mesh(this.sharedNodeGeometry, material);
+		mesh.scale.setScalar(radius);
+		return mesh;
+	}
+
+	private syncNodeScale(): void {
+		for (const object of this.nodeObjects.values()) {
+			const baseSize = object.userData.baseSize as number | undefined;
+			if (baseSize === undefined) continue;
+			const radius = Math.max(1.5, baseSize * SPHERE_SIZE_MULTIPLIER * this.visualOptions.nodeSizeScale);
+			object.scale.setScalar(radius);
+		}
 	}
 
 	private syncNodeAppearance(): void {
@@ -892,11 +903,18 @@ export class GraphSceneRenderer {
 			// ConvexGeometry needs at least 4 non-coplanar points
 			if (inflated.length < MIN_HULL_POINTS) {
 				const base = inflated[0] ?? new THREE.Vector3(cx, cy, cz);
+				const fallbackOffsets: ReadonlyArray<readonly [number, number, number]> = [
+					[1, 1, 1],
+					[1, -1, -1],
+					[-1, 1, -1],
+					[-1, -1, 1],
+				];
 				while (inflated.length < MIN_HULL_POINTS) {
+					const offset = fallbackOffsets[inflated.length];
 					inflated.push(new THREE.Vector3(
-						base.x + (Math.random() - 0.5) * PADDING * 2,
-						base.y + (Math.random() - 0.5) * PADDING * 2,
-						base.z + (Math.random() - 0.5) * PADDING * 2,
+						base.x + offset[0] * PADDING,
+						base.y + offset[1] * PADDING,
+						base.z + offset[2] * PADDING,
 					));
 				}
 			}
@@ -1013,18 +1031,18 @@ export class GraphSceneRenderer {
 
 	private disposeNodeObjects(): void {
 		for (const object of this.nodeObjects.values()) {
-			this.disposeObject(object);
+			this.disposeObject(object, false);
 		}
 		this.nodeObjects.clear();
 	}
 
-	private disposeObject(object: THREE.Object3D): void {
+	private disposeObject(object: THREE.Object3D, disposeGeometry = true): void {
 		object.traverse((child) => {
 			const resource = child as THREE.Object3D & {
 				geometry?: { dispose?: () => void };
 				material?: THREE.Material | THREE.Material[];
 			};
-			resource.geometry?.dispose?.();
+			if (disposeGeometry) resource.geometry?.dispose?.();
 			if (resource.material) {
 				const materials = Array.isArray(resource.material) ? resource.material : [resource.material];
 				for (const material of materials) {

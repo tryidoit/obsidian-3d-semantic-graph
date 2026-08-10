@@ -2,8 +2,8 @@ import { Plugin, WorkspaceLeaf } from "obsidian";
 import {
 	clonePluginSettings,
 	createDefaultSettings,
-	isPresetEmbeddingModel,
 	PluginSettings,
+	sanitizePluginSettings,
 } from "./types";
 import { SemanticGraphSettingTab } from "./settings";
 import { SemanticGraphView, VIEW_TYPE } from "./graph-view";
@@ -64,50 +64,18 @@ export default class SemanticGraphPlugin extends Plugin {
 
 	async loadSettings() {
 		const loadedData: unknown = await this.loadData();
-		const loaded = (loadedData ?? {}) as Partial<PluginSettings> & {
-			nodeAssetMode?: unknown;
-			openaiApiKey?: unknown;
-		};
-		this.settings = clonePluginSettings(Object.assign({}, createDefaultSettings(), loaded));
-
-		// Migrate legacy openaiApiKey field
-		if (typeof loaded.openaiApiKey === "string" && !this.settings.embeddingApiKey) {
-			this.settings.embeddingApiKey = loaded.openaiApiKey;
+		const raw = loadedData && typeof loadedData === "object"
+			? { ...(loadedData as Record<string, unknown>) }
+			: {};
+		// Migrate the pre-1.3 OpenAI-specific key into the provider-neutral field.
+		if (typeof raw.openaiApiKey === "string" && typeof raw.embeddingApiKey !== "string") {
+			raw.embeddingApiKey = raw.openaiApiKey;
 		}
-
-		if (!["openai", "ollama"].includes(this.settings.embeddingProvider)) {
-			this.settings.embeddingProvider = "openai";
-		}
-
-		if (!isPresetEmbeddingModel(this.settings.embeddingProvider, this.settings.embeddingModel)) {
-			this.settings.embeddingModel =
-				this.settings.embeddingProvider === "ollama" ? "nomic-embed-text" : "text-embedding-3-large";
-		}
-
-		if (!["auto", "dark", "light"].includes(this.settings.sceneTheme)) {
-			this.settings.sceneTheme = "auto";
-		}
-
-		if (!["auto", "en", "ko"].includes(this.settings.language)) {
-			this.settings.language = "auto";
-		}
-
-		if (!["ctime", "frontmatter"].includes(this.settings.timelineDateSource)) {
-			this.settings.timelineDateSource = "ctime";
-		}
-
-		// Clean up legacy fields
-		const s = this.settings as unknown as Record<string, unknown>;
-		delete s.nodeAssetMode;
-		delete s.openaiApiKey;
-		delete s.useCustomEmbeddingModel;
-		delete s.customEmbeddingModel;
-		delete s.customEmbeddingEndpoint;
-		delete s.sphereizeData;
+		this.settings = sanitizePluginSettings(raw);
 	}
 
 	async saveSettings(_sourceView?: SemanticGraphView) {
-		const nextSettings = clonePluginSettings(this.settings);
+		const nextSettings = sanitizePluginSettings(this.settings);
 		this.settings = nextSettings;
 		await this.saveData(nextSettings);
 		applyLanguageSetting(nextSettings.language);

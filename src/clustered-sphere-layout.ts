@@ -179,5 +179,5 @@ function vecDist(a: [number, number, number], b: [number, number, number]): numb
 }
 
 function getFolderPath(path: string): string {
-	return path.includes("/") ? path.substring(0, path.lastIndexOf("/")) : "/";
+	return path.includes("/") ? path.split("/")[0] || "/" : "/";
 }

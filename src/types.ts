@@ -1,4 +1,9 @@
-export type EmbeddingProvider = "openai" | "ollama";
+export type EmbeddingProvider = "openai" | "anthropic";
+
+export interface EmbeddingProviderCapabilities {
+	embeddings: boolean;
+	queryEmbeddings: boolean;
+}
 
 export type SceneThemeSetting = "auto" | "dark" | "light";
 
@@ -12,8 +17,8 @@ export interface PluginSettings {
 	embeddingProvider: EmbeddingProvider;
 	embeddingApiKey: string;
 	embeddingModel: string;
-	ollamaEndpoint: string;
 	uploadedVectorsFileName: string;
+	uploadedVectorsRevision: number;
 	suggestedLinkCount: number;
 	neighborCount: number;
 	projectionMethod: "umap" | "pca";
@@ -45,8 +50,8 @@ export function createDefaultSettings(): PluginSettings {
 		embeddingProvider: "openai",
 		embeddingApiKey: "",
 		embeddingModel: "text-embedding-3-large",
-		ollamaEndpoint: "http://localhost:11434",
 		uploadedVectorsFileName: "",
+		uploadedVectorsRevision: 0,
 		suggestedLinkCount: 20,
 		neighborCount: 10,
 		projectionMethod: "umap",
@@ -76,22 +81,97 @@ export function clonePluginSettings(settings: PluginSettings): PluginSettings {
 	};
 }
 
+export function sanitizePluginSettings(input: unknown): PluginSettings {
+	const defaults = createDefaultSettings();
+	if (!input || typeof input !== "object") return defaults;
+	const raw = input as Record<string, unknown>;
+	const provider: EmbeddingProvider = raw.embeddingProvider === "anthropic" ? "anthropic" : "openai";
+	const model = typeof raw.embeddingModel === "string" ? raw.embeddingModel : "";
+
+	return {
+		language: isOneOf(raw.language, ["auto", "en", "ko"] as const) ? raw.language : defaults.language,
+		embeddingProvider: provider,
+		embeddingApiKey: typeof raw.embeddingApiKey === "string" ? raw.embeddingApiKey.trim() : "",
+		embeddingModel: isPresetEmbeddingModel(provider, model) ? model : getDefaultEmbeddingModel(provider),
+		uploadedVectorsFileName: typeof raw.uploadedVectorsFileName === "string" ? raw.uploadedVectorsFileName : "",
+		uploadedVectorsRevision: boundedNumber(
+			raw.uploadedVectorsRevision,
+			0,
+			Number.MAX_SAFE_INTEGER,
+			defaults.uploadedVectorsRevision,
+			true
+		),
+		suggestedLinkCount: boundedNumber(raw.suggestedLinkCount, 5, 100, defaults.suggestedLinkCount, true),
+		neighborCount: boundedNumber(raw.neighborCount, 3, 30, defaults.neighborCount, true),
+		projectionMethod: isOneOf(raw.projectionMethod, ["umap", "pca"] as const)
+			? raw.projectionMethod
+			: defaults.projectionMethod,
+		umapNNeighbors: boundedNumber(raw.umapNNeighbors, 5, 50, defaults.umapNNeighbors, true),
+		umapMinDist: boundedNumber(raw.umapMinDist, 0, 0.99, defaults.umapMinDist),
+		nodeColorBy: isOneOf(raw.nodeColorBy, ["folder", "tag"] as const) ? raw.nodeColorBy : defaults.nodeColorBy,
+		timelineDateSource: isOneOf(raw.timelineDateSource, ["ctime", "frontmatter"] as const)
+			? raw.timelineDateSource
+			: defaults.timelineDateSource,
+		showLinks: typeof raw.showLinks === "boolean" ? raw.showLinks : defaults.showLinks,
+		showGrid: typeof raw.showGrid === "boolean" ? raw.showGrid : defaults.showGrid,
+		showClusters: isOneOf(raw.showClusters, ["on", "hover", "off"] as const)
+			? raw.showClusters
+			: defaults.showClusters,
+		clusterSource: isOneOf(raw.clusterSource, ["semantic", "folder"] as const)
+			? raw.clusterSource
+			: defaults.clusterSource,
+		sceneTheme: isOneOf(raw.sceneTheme, ["auto", "dark", "light"] as const) ? raw.sceneTheme : defaults.sceneTheme,
+		nodeOpacity: boundedNumber(raw.nodeOpacity, 0.15, 1, defaults.nodeOpacity),
+		nodeSizeScale: boundedNumber(raw.nodeSizeScale, 0.4, 2, defaults.nodeSizeScale),
+		dragSensitivity: boundedNumber(raw.dragSensitivity, 0.2, 3, defaults.dragSensitivity),
+		autoOrbitSpeed: boundedNumber(raw.autoOrbitSpeed, 0, 3, defaults.autoOrbitSpeed),
+		entryAnimation: typeof raw.entryAnimation === "boolean" ? raw.entryAnimation : defaults.entryAnimation,
+		layoutSeed: boundedNumber(raw.layoutSeed, 0, 2147483647, defaults.layoutSeed, true),
+		excludeFolders: Array.isArray(raw.excludeFolders)
+			? Array.from(new Set(raw.excludeFolders
+				.filter((folder): folder is string => typeof folder === "string")
+				.map(normalizeExcludedFolder)
+				.filter(Boolean)))
+			: [],
+	};
+}
+
+function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
+	return typeof value === "string" && values.includes(value as T);
+}
+
+function boundedNumber(value: unknown, min: number, max: number, fallback: number, integer = false): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	const bounded = Math.max(min, Math.min(max, value));
+	return integer ? Math.round(bounded) : bounded;
+}
+
+export function normalizeExcludedFolder(folder: string): string {
+	return folder.trim().replace(/^\/+|\/+$/g, "");
+}
+
 export const EMBEDDING_PROVIDER_LABELS: Record<EmbeddingProvider, string> = {
 	openai: "OpenAI",
-	ollama: "Ollama (local)",
+	anthropic: "Anthropic (Claude — reserved)",
+};
+
+/**
+ * Capabilities are explicit so a future local or cloud adapter can be added
+ * without teaching the graph, search, or settings layers provider-specific
+ * rules. Anthropic currently has no native embeddings API.
+ */
+export const EMBEDDING_PROVIDER_CAPABILITIES: Record<EmbeddingProvider, EmbeddingProviderCapabilities> = {
+	openai: { embeddings: true, queryEmbeddings: true },
+	anthropic: { embeddings: false, queryEmbeddings: false },
 };
 
 export const PRESET_EMBEDDING_MODELS: Record<EmbeddingProvider, readonly string[]> = {
 	openai: [
-		"text-embedding-3-small",
 		"text-embedding-3-large",
+		"text-embedding-3-small",
 		"text-embedding-ada-002",
 	],
-	ollama: [
-		"nomic-embed-text",
-		"mxbai-embed-large",
-		"bge-m3",
-	],
+	anthropic: [],
 };
 
 export function getDefaultEmbeddingModel(provider: EmbeddingProvider): string {
@@ -114,10 +194,19 @@ export function canGenerateEmbeddings(settings: PluginSettings): boolean {
 	if (settings.uploadedVectorsFileName.trim()) {
 		return true;
 	}
-	if (settings.embeddingProvider === "ollama") {
-		return Boolean(settings.ollamaEndpoint.trim());
-	}
-	return Boolean(settings.embeddingApiKey.trim());
+	return canGenerateProviderEmbeddings(settings);
+}
+
+export function canGenerateProviderEmbeddings(settings: PluginSettings): boolean {
+	return EMBEDDING_PROVIDER_CAPABILITIES[settings.embeddingProvider].embeddings
+		&& Boolean(settings.embeddingApiKey.trim())
+		&& Boolean(settings.embeddingModel.trim());
+}
+
+export function canGenerateQueryEmbeddings(settings: PluginSettings): boolean {
+	return EMBEDDING_PROVIDER_CAPABILITIES[settings.embeddingProvider].queryEmbeddings
+		&& Boolean(settings.embeddingApiKey.trim())
+		&& Boolean(settings.embeddingModel.trim());
 }
 
 export function getNodePath(nodeRef: string | GraphNode): string | null {
@@ -127,7 +216,10 @@ export function getNodePath(nodeRef: string | GraphNode): string | null {
 
 export function isPathExcluded(path: string, excludeFolders: string[]): boolean {
 	return excludeFolders.some(
-		(folder) => path.startsWith(`${folder}/`) || path === folder
+		(rawFolder) => {
+			const folder = normalizeExcludedFolder(rawFolder);
+			return Boolean(folder) && (path.startsWith(`${folder}/`) || path === folder);
+		}
 	);
 }
 

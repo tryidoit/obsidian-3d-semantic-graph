@@ -18,10 +18,10 @@ export class UmapReducer {
 	 * Reduce high-dimensional embeddings to 3D coordinates.
 	 * Returns array of [x, y, z] in the same order as input.
 	 */
-	reduce(
+	async reduce(
 		embeddings: number[][],
 		onProgress?: (epoch: number, totalEpochs: number) => void
-	): number[][] {
+	): Promise<number[][]> {
 		const n = embeddings.length;
 
 		// Edge cases: fewer than 3 points
@@ -52,11 +52,16 @@ export class UmapReducer {
 			if (onProgress && i % 10 === 0) {
 				onProgress(i, totalEpochs);
 			}
+			if (i % 5 === 4) await yieldToEventLoop();
 		}
 		onProgress?.(totalEpochs, totalEpochs);
 
 		return umap.getEmbedding();
 	}
+}
+
+function yieldToEventLoop(): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
 /** Cosine distance = 1 - cosine_similarity */

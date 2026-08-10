@@ -1,6 +1,6 @@
 import { ItemView, TFile, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
 import { computeNeighbors, NeighborEntry } from "./insights";
-import { GraphData, GraphNode, GraphVisualOptions, PluginSettings } from "./types";
+import { GraphData, GraphNode, GraphVisualOptions, isPathExcluded, PluginSettings } from "./types";
 import { t } from "./i18n";
 
 export const NEIGHBORS_VIEW_TYPE = "semantic-graph-neighbors";
@@ -21,6 +21,7 @@ export class NeighborsView extends ItemView {
 	private hintEl: HTMLElement | null = null;
 	private renderedPath: string | null = null;
 	private refreshTimer: number | null = null;
+	private refreshRequestId = 0;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -68,6 +69,7 @@ export class NeighborsView extends ItemView {
 	}
 
 	onClose(): Promise<void> {
+		this.refreshRequestId++;
 		if (this.refreshTimer !== null) {
 			window.clearTimeout(this.refreshTimer);
 			this.refreshTimer = null;
@@ -80,7 +82,14 @@ export class NeighborsView extends ItemView {
 	updateSettings(settings: PluginSettings): void {
 		const previous = this.settings;
 		this.settings = settings;
-		if (previous.neighborCount !== settings.neighborCount) {
+		const vectorSourceChanged = previous.embeddingProvider !== settings.embeddingProvider
+			|| previous.embeddingModel !== settings.embeddingModel
+			|| previous.embeddingApiKey !== settings.embeddingApiKey
+			|| previous.uploadedVectorsFileName !== settings.uploadedVectorsFileName
+			|| previous.uploadedVectorsRevision !== settings.uploadedVectorsRevision
+			|| previous.excludeFolders.join("\n") !== settings.excludeFolders.join("\n");
+		if (vectorSourceChanged) this.vectors = null;
+		if (previous.neighborCount !== settings.neighborCount || vectorSourceChanged) {
 			this.renderedPath = null;
 			this.scheduleRefresh();
 		}
@@ -98,6 +107,7 @@ export class NeighborsView extends ItemView {
 
 	private async refresh(): Promise<void> {
 		if (!this.miniGraphEl || !this.listEl || !this.hintEl) return;
+		const requestId = ++this.refreshRequestId;
 		this.settings = this.getLatestSettings();
 
 		const activeFile = this.app.workspace.getActiveFile();
@@ -108,6 +118,7 @@ export class NeighborsView extends ItemView {
 		if (activeFile.path === this.renderedPath) return;
 
 		const vectors = await this.loadVectors();
+		if (requestId !== this.refreshRequestId || this.app.workspace.getActiveFile()?.path !== activeFile.path) return;
 		if (!vectors || vectors.size < 2) {
 			this.showHint(t("neighbors.noVectors"));
 			return;
@@ -126,7 +137,7 @@ export class NeighborsView extends ItemView {
 		this.renderedPath = activeFile.path;
 		this.hintEl.hide();
 		this.renderList(neighbors);
-		await this.renderMiniGraph(activeFile, neighbors);
+		await this.renderMiniGraph(activeFile, neighbors, requestId);
 	}
 
 	private showHint(text: string): void {
@@ -147,7 +158,12 @@ export class NeighborsView extends ItemView {
 		try {
 			if (this.settings.uploadedVectorsFileName.trim()) {
 				const { readUploadedVectors } = await import("./uploaded-vectors");
-				this.vectors = await readUploadedVectors(this.app, this.pluginDir);
+				const allowedPaths = new Set(
+					this.app.vault.getMarkdownFiles()
+						.filter((file) => !isPathExcluded(file.path, this.settings.excludeFolders))
+						.map((file) => file.path)
+				);
+				this.vectors = await readUploadedVectors(this.app, this.pluginDir, { allowedPaths });
 			} else {
 				const { EmbeddingService } = await import("./embedding");
 				const service = new EmbeddingService(this.app, this.settings, this.pluginDir);
@@ -184,13 +200,22 @@ export class NeighborsView extends ItemView {
 		}
 	}
 
-	private async renderMiniGraph(activeFile: TFile, neighbors: NeighborEntry[]): Promise<void> {
+	private async renderMiniGraph(
+		activeFile: TFile,
+		neighbors: NeighborEntry[],
+		requestId: number
+	): Promise<void> {
 		if (!this.miniGraphEl) return;
 		this.miniGraphEl.show();
 
 		const data = this.buildMiniGraphData(activeFile, neighbors);
 		this.renderer?.dispose();
 		const { GraphRenderer } = await import("./graph-renderer");
+		if (
+			requestId !== this.refreshRequestId
+			|| this.app.workspace.getActiveFile()?.path !== activeFile.path
+			|| !this.miniGraphEl
+		) return;
 		this.renderer = new GraphRenderer(
 			this.miniGraphEl,
 			(node) => {

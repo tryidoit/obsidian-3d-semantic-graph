@@ -1,14 +1,23 @@
 {
 	"name": "semantic-graph",
-	"version": "1.4.0",
+	"version": "1.5.0",
 	"description": "3D Semantic Graph plugin for Obsidian",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"build": "node esbuild.config.mjs production"
+		"build": "node esbuild.config.mjs production",
+		"typecheck": "tsc --noEmit",
+		"lint": "eslint src tests --max-warnings=0",
+		"test": "vitest run",
+		"check": "npm run typecheck && npm run lint && npm test && npm run build"
 	},
-	"keywords": [],
-	"author": "",
+	"keywords": [
+		"obsidian",
+		"semantic-graph",
+		"embeddings",
+		"threejs"
+	],
+	"author": "KHR0907",
 	"license": "MIT",
 	"dependencies": {
 		"3d-force-graph": "^1.73.0",
@@ -16,7 +25,7 @@
 		"umap-js": "^1.4.0"
 	},
 	"devDependencies": {
-		"@types/node": "^16.11.6",
+		"@types/node": "^20.19.43",
 		"@types/three": "^0.160.0",
 		"esbuild": "0.25.5",
 		"eslint": "^9.39.4",
@@ -24,6 +33,7 @@
 		"obsidian": "^1.13.1",
 		"tslib": "2.4.0",
 		"typescript": "^5.8.3",
-		"typescript-eslint": "^8.62.1"
+		"typescript-eslint": "^8.62.1",
+		"vitest": "^4.1.10"
 	}
 }

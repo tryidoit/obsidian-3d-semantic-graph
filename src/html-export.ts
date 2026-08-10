@@ -30,8 +30,8 @@ interface ExportNode {
 }
 
 /**
- * Build a standalone HTML document reproducing the current graph. Positions are
- * baked in; the 3d-force-graph library is loaded from a CDN, so viewing the file
+ * Build an HTML document reproducing the current graph. Positions are baked in;
+ * the 3d-force-graph library is loaded from a CDN, so viewing the file
  * requires an internet connection. Node clicks deep-link back into the vault.
  */
 export function buildGraphExportHtml(data: GraphData, options: GraphExportOptions): string {

@@ -1,16 +1,27 @@
 import { requestUrl } from "obsidian";
-import { EmbeddingProvider, getEffectiveEmbeddingModel, PluginSettings } from "./types";
+import {
+	EmbeddingProvider,
+	EmbeddingProviderCapabilities,
+	EMBEDDING_PROVIDER_CAPABILITIES,
+	getEffectiveEmbeddingModel,
+	PluginSettings,
+} from "./types";
+
+export interface EmbeddingRequestOptions {
+	inputType: "document" | "query";
+}
 
 export interface EmbeddingProviderAdapter {
 	readonly provider: EmbeddingProvider;
 	readonly batchSize: number;
-	embed(texts: string[]): Promise<number[][]>;
+	readonly capabilities: EmbeddingProviderCapabilities;
+	embed(texts: string[], options?: EmbeddingRequestOptions): Promise<number[][]>;
 }
 
 export function createEmbeddingProviderAdapter(settings: PluginSettings): EmbeddingProviderAdapter {
 	switch (settings.embeddingProvider) {
-		case "ollama":
-			return new OllamaEmbeddingAdapter(settings);
+		case "anthropic":
+			return new AnthropicEmbeddingAdapter(settings);
 		case "openai":
 			return new OpenAIEmbeddingAdapter(settings);
 	}
@@ -19,6 +30,7 @@ export function createEmbeddingProviderAdapter(settings: PluginSettings): Embedd
 abstract class BaseEmbeddingAdapter implements EmbeddingProviderAdapter {
 	abstract readonly provider: EmbeddingProvider;
 	readonly batchSize: number = 100;
+	abstract readonly capabilities: EmbeddingProviderCapabilities;
 	protected readonly settings: PluginSettings;
 	protected readonly modelId: string;
 
@@ -27,7 +39,7 @@ abstract class BaseEmbeddingAdapter implements EmbeddingProviderAdapter {
 		this.modelId = getEffectiveEmbeddingModel(settings);
 	}
 
-	abstract embed(texts: string[]): Promise<number[][]>;
+	abstract embed(texts: string[], options?: EmbeddingRequestOptions): Promise<number[][]>;
 }
 
 interface OpenAIEmbeddingResponse {
@@ -37,8 +49,9 @@ interface OpenAIEmbeddingResponse {
 
 class OpenAIEmbeddingAdapter extends BaseEmbeddingAdapter {
 	readonly provider = "openai" as const;
+	readonly capabilities = EMBEDDING_PROVIDER_CAPABILITIES.openai;
 
-	async embed(texts: string[]): Promise<number[][]> {
+	async embed(texts: string[], _options?: EmbeddingRequestOptions): Promise<number[][]> {
 		const response = await requestUrl({
 			url: "https://api.openai.com/v1/embeddings",
 			method: "POST",
@@ -50,6 +63,7 @@ class OpenAIEmbeddingAdapter extends BaseEmbeddingAdapter {
 				model: this.modelId,
 				input: texts,
 			}),
+			throw: false,
 		});
 
 		const body = response.json as OpenAIEmbeddingResponse;
@@ -63,51 +77,46 @@ class OpenAIEmbeddingAdapter extends BaseEmbeddingAdapter {
 		if (!Array.isArray(data) || data.length !== texts.length) {
 			throw new Error("OpenAI returned an unexpected embedding response.");
 		}
-		return data
+		const indexes = new Set(data.map((item) => item.index));
+		if (
+			indexes.size !== texts.length
+			|| data.some((item) => !Number.isInteger(item.index) || item.index < 0 || item.index >= texts.length)
+		) {
+			throw new Error("OpenAI returned invalid embedding indexes.");
+		}
+		const embeddings = data
 			.sort((a, b) => a.index - b.index)
 			.map((item) => item.embedding);
-	}
-}
-
-interface OllamaEmbedResponse {
-	embeddings?: number[][];
-	error?: string;
-}
-
-class OllamaEmbeddingAdapter extends BaseEmbeddingAdapter {
-	readonly provider = "ollama" as const;
-	readonly batchSize = 16;
-
-	async embed(texts: string[]): Promise<number[][]> {
-		const endpoint = this.settings.ollamaEndpoint.trim().replace(/\/+$/, "");
-		const response = await requestUrl({
-			url: `${endpoint}/api/embed`,
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: this.modelId,
-				input: texts,
-			}),
-			throw: false,
-		});
-
-		if (response.status !== 200) {
-			let detail = "";
-			try {
-				detail = (response.json as OllamaEmbedResponse)?.error ?? "";
-			} catch {
-				// Non-JSON error body
-			}
-			throw new Error(
-				`Ollama API error (${response.status}): ${detail || "Is Ollama running and the model pulled?"}`
-			);
-		}
-
-		const embeddings = (response.json as OllamaEmbedResponse)?.embeddings;
-		if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
-			throw new Error("Ollama returned an unexpected embedding response.");
-		}
+		validateEmbeddingBatch(embeddings, texts.length, "OpenAI");
 		return embeddings;
 	}
 }
 
+class AnthropicEmbeddingAdapter extends BaseEmbeddingAdapter {
+	readonly provider = "anthropic" as const;
+	readonly capabilities = EMBEDDING_PROVIDER_CAPABILITIES.anthropic;
+
+	embed(_texts: string[], _options?: EmbeddingRequestOptions): Promise<number[][]> {
+		return Promise.reject(new Error(
+			"Anthropic does not currently provide a native embeddings API. Select OpenAI or upload compatible vectors."
+		));
+	}
+}
+
+function validateEmbeddingBatch(embeddings: number[][], expectedCount: number, provider: string): void {
+	if (embeddings.length !== expectedCount || embeddings.length === 0) {
+		throw new Error(`${provider} returned an unexpected embedding count.`);
+	}
+	const dimensions = embeddings[0]?.length ?? 0;
+	if (dimensions === 0) {
+		throw new Error(`${provider} returned an empty embedding.`);
+	}
+	for (const vector of embeddings) {
+		if (
+			vector.length !== dimensions
+			|| vector.some((value) => !Number.isFinite(value))
+		) {
+			throw new Error(`${provider} returned inconsistent or invalid embeddings.`);
+		}
+	}
+}

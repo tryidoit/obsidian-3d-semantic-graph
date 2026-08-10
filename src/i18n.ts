@@ -31,6 +31,14 @@ const STRINGS = {
 	"search.noResults": { en: "No results.", ko: "결과가 없습니다." },
 	"search.searching": { en: "Searching...", ko: "검색 중..." },
 	"search.failed": { en: "Search failed: {message}", ko: "검색 실패: {message}" },
+	"search.providerUnavailable": {
+		en: "The selected provider cannot embed search queries. Select OpenAI or upload vectors with a matching query provider.",
+		ko: "선택한 프로바이더는 검색어 임베딩을 만들 수 없습니다. OpenAI를 선택하거나 검색 프로바이더와 호환되는 벡터를 사용하세요.",
+	},
+	"search.vectorDimensionMismatch": {
+		en: "The search vector dimension does not match the note vectors.",
+		ko: "검색 벡터 차원과 노트 벡터 차원이 일치하지 않습니다.",
+	},
 	"toolbar.insights": { en: "Insights", ko: "인사이트" },
 	"toolbar.insightsAria": { en: "Toggle insights", ko: "인사이트 열기/닫기" },
 	"toolbar.timeline": { en: "Timeline", ko: "타임라인" },
@@ -76,6 +84,7 @@ const STRINGS = {
 	"insights.closeAria": { en: "Close insights", ko: "인사이트 닫기" },
 	"insights.loadFirst": { en: "Load the graph first.", ko: "그래프를 먼저 불러오세요." },
 	"insights.computing": { en: "Computing insights… {percent}%", ko: "인사이트 계산 중… {percent}%" },
+	"insights.failed": { en: "Failed to compute insights: {message}", ko: "인사이트 계산 실패: {message}" },
 	"insights.suggested.title": { en: "Suggested links", ko: "링크 제안" },
 	"insights.suggested.desc": {
 		en: "Semantically close notes that are not linked yet.",
@@ -140,26 +149,22 @@ const STRINGS = {
 	"settings.embeddings.heading": { en: "Embeddings", ko: "임베딩" },
 	"settings.provider.name": { en: "Embedding provider", ko: "임베딩 프로바이더" },
 	"settings.provider.desc": {
-		en: "OpenAI requires an access key. Ollama runs locally without a key.",
-		ko: "OpenAI는 액세스 키가 필요합니다. Ollama는 키 없이 로컬에서 동작합니다.",
+		en: "OpenAI provides embeddings. Anthropic is reserved for a future native Claude embeddings API.",
+		ko: "OpenAI는 임베딩을 제공합니다. Anthropic은 향후 Claude 네이티브 임베딩 API를 위한 예약 항목입니다.",
 	},
-	"settings.ollamaEndpoint.name": { en: "Ollama endpoint", ko: "Ollama 엔드포인트" },
-	"settings.ollamaEndpoint.desc": {
-		en: "Base URL of the local Ollama server. Default: http://localhost:11434.",
-		ko: "로컬 Ollama 서버 주소입니다. 기본값: http://localhost:11434.",
+	"settings.anthropicReserved.name": { en: "Claude embeddings unavailable", ko: "Claude 임베딩 미지원" },
+	"settings.anthropicReserved.desc": {
+		en: "Anthropic currently has no native embeddings API. This provider slot is intentionally disabled until one is available.",
+		ko: "Anthropic은 현재 네이티브 임베딩 API를 제공하지 않습니다. 공식 API가 제공될 때까지 이 프로바이더는 비활성 상태입니다.",
 	},
 	"settings.accessKey.name": { en: "Access key", ko: "액세스 키" },
 	"settings.accessKey.desc": {
-		en: "Access key for generating embeddings. Leave blank to use the sphere layout without semantic positioning.",
-		ko: "임베딩 생성에 사용하는 액세스 키입니다. 비워 두면 시맨틱 배치 없이 구형 레이아웃을 사용합니다.",
+		en: "OpenAI API key for generating embeddings. It is stored in local Obsidian plugin settings; note text is sent to OpenAI when generation runs.",
+		ko: "임베딩 생성용 OpenAI API 키입니다. Obsidian 로컬 플러그인 설정에 저장되며, 생성 시 노트 본문이 OpenAI로 전송됩니다.",
 	},
 	"settings.accessKey.placeholder": { en: "Paste your access key", ko: "액세스 키를 붙여넣으세요" },
 	"settings.model.name": { en: "Embedding model", ko: "임베딩 모델" },
 	"settings.model.desc": { en: "Choose which model to use for embeddings.", ko: "임베딩에 사용할 모델을 선택합니다." },
-	"settings.model.descOllama": {
-		en: "Choose which model to use for embeddings. Pull it first with `ollama pull <model>`.",
-		ko: "임베딩에 사용할 모델을 선택합니다. 먼저 `ollama pull <모델>`로 받아 두세요.",
-	},
 	"settings.vectorFile.name": { en: "Vector file", ko: "벡터 파일" },
 	"settings.vectorFile.desc": {
 		en: "Use an uploaded vector file instead of generated embeddings.",
@@ -302,7 +307,6 @@ const STRINGS = {
 	"notice.vectorsExported.uploaded": { en: "Uploaded vector file exported.", ko: "업로드된 벡터 파일을 내보냈습니다." },
 	"notice.vectorsExported.generated": { en: "Generated vector file exported.", ko: "생성한 벡터 파일을 내보냈습니다." },
 	"notice.vectorsExported.template": { en: "Template vector file exported.", ko: "템플릿 벡터 파일을 내보냈습니다." },
-	"notice.vectorsExported.createdInVault": { en: "{message} Created {path} in the vault.", ko: "{message} Vault에 {path} 파일을 만들었습니다." },
 	"notice.vectorsExportFailed": { en: "Failed to export vector file: {message}", ko: "벡터 파일 내보내기 실패: {message}" },
 } as const;
 

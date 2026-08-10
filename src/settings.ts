@@ -2,16 +2,16 @@ import {
 	App,
 	Notice,
 	Setting,
-	normalizePath,
 	PluginSettingTab,
-	TFile,
 } from "obsidian";
 import SemanticGraphPlugin from "./main";
 import { EmbeddingService } from "./embedding";
 import { t } from "./i18n";
 import {
 	clonePluginSettings,
+	canGenerateProviderEmbeddings,
 	createDefaultSettings,
+	EMBEDDING_PROVIDER_CAPABILITIES,
 	EMBEDDING_PROVIDER_LABELS,
 	EmbeddingProvider,
 	generateRandomLayoutSeed,
@@ -20,7 +20,11 @@ import {
 	PluginSettings,
 	PRESET_EMBEDDING_MODELS,
 } from "./types";
-import { serializeUploadedVectors, UPLOADED_VECTORS_FILE } from "./uploaded-vectors";
+import {
+	parseUploadedVectorsJson,
+	serializeUploadedVectors,
+	UPLOADED_VECTORS_FILE,
+} from "./uploaded-vectors";
 
 export class SemanticGraphSettingTab extends PluginSettingTab {
 	plugin: SemanticGraphPlugin;
@@ -82,19 +86,9 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 						},
 					},
 					{
-						name: t("settings.ollamaEndpoint.name"),
-						desc: t("settings.ollamaEndpoint.desc"),
-						visible: () => this.plugin.settings.embeddingProvider === "ollama",
-						control: {
-							type: "text",
-							key: "ollamaEndpoint",
-							placeholder: "http://localhost:11434",
-						},
-					},
-					{
 						name: t("settings.accessKey.name"),
 						desc: t("settings.accessKey.desc"),
-						visible: () => this.plugin.settings.embeddingProvider !== "ollama",
+						visible: () => EMBEDDING_PROVIDER_CAPABILITIES[this.plugin.settings.embeddingProvider].embeddings,
 						render: (setting: Setting) => {
 							setting.addText((text) =>
 								text
@@ -108,11 +102,17 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 						},
 					},
 					{
+						name: t("settings.anthropicReserved.name"),
+						desc: t("settings.anthropicReserved.desc"),
+						visible: () => this.plugin.settings.embeddingProvider === "anthropic",
+						render: (setting: Setting) => {
+							setting.settingEl.addClass("semantic-graph-setting-warning");
+						},
+					},
+					{
 						name: t("settings.model.name"),
-						desc:
-							settings.embeddingProvider === "ollama"
-								? t("settings.model.descOllama")
-								: t("settings.model.desc"),
+						desc: t("settings.model.desc"),
+						visible: () => EMBEDDING_PROVIDER_CAPABILITIES[this.plugin.settings.embeddingProvider].embeddings,
 						control: {
 							type: "dropdown",
 							key: "embeddingModel",
@@ -500,22 +500,29 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 	}
 
 	private uploadVectorsJson(): void {
-		const input = activeDocument.createEl("input");
+		const input = activeDocument.body.createEl("input");
 		input.type = "file";
 		input.accept = "application/json,.json";
+		input.hidden = true;
+		input.oncancel = () => input.remove();
 		input.onchange = async () => {
 			const file = input.files?.[0];
 			if (!file) return;
 			try {
 				const raw = await file.text();
-				JSON.parse(raw);
-				const path = `${this.plugin.manifest.dir}/${UPLOADED_VECTORS_FILE}`;
+				parseUploadedVectorsJson(raw);
+				const path = `${this.plugin.manifest.dir!}/${UPLOADED_VECTORS_FILE}`;
 				await this.app.vault.adapter.write(path, raw);
-				await this.patchSettings({ uploadedVectorsFileName: file.name });
+				await this.patchSettings({
+					uploadedVectorsFileName: file.name,
+					uploadedVectorsRevision: this.plugin.settings.uploadedVectorsRevision + 1,
+				});
 				this.update();
 				new Notice(t("notice.vectorsUploaded"));
 			} catch (error) {
 				new Notice(t("notice.vectorsUploadFailed", { message: errorMessage(error) }));
+			} finally {
+				input.remove();
 			}
 		};
 		input.click();
@@ -529,20 +536,22 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 			let fileName: string;
 			let noticeMessage: string;
 
-			if (await adapter.exists(uploadedPath)) {
+			if (this.plugin.settings.uploadedVectorsFileName && await adapter.exists(uploadedPath)) {
 				raw = await adapter.read(uploadedPath);
+				parseUploadedVectorsJson(raw);
 				fileName = this.plugin.settings.uploadedVectorsFileName || UPLOADED_VECTORS_FILE;
 				noticeMessage = t("notice.vectorsExported.uploaded");
 			} else {
 				const s = this.plugin.settings;
-				const canGenerate = s.embeddingProvider === "ollama"
-					? Boolean(s.ollamaEndpoint.trim())
-					: Boolean(s.embeddingApiKey.trim());
+				const canGenerate = canGenerateProviderEmbeddings(s);
 				if (canGenerate) {
 					new Notice(t("notice.vectorsGenerating"));
 					const service = new EmbeddingService(this.app, this.plugin.settings, this.plugin.manifest.dir!);
 					const embeddings = await service.getEmbeddings();
-					raw = serializeUploadedVectors(embeddings.entries());
+					raw = serializeUploadedVectors(embeddings.entries(), {
+						provider: s.embeddingProvider,
+						model: s.embeddingModel,
+					});
 					fileName = "exported-vectors.json";
 					noticeMessage = t("notice.vectorsExported.generated");
 				} else {
@@ -553,8 +562,7 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 			}
 
 			this.downloadJsonFile(fileName, raw);
-			const vaultPath = await this.writeVectorsPreviewFile(fileName, raw);
-			new Notice(t("notice.vectorsExported.createdInVault", { message: noticeMessage, path: vaultPath }));
+			new Notice(noticeMessage);
 		} catch (error) {
 			new Notice(t("notice.vectorsExportFailed", { message: errorMessage(error) }));
 		}
@@ -573,26 +581,17 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 	private downloadJsonFile(fileName: string, raw: string): void {
 		const blob = new Blob([raw], { type: "application/json" });
 		const url = URL.createObjectURL(blob);
-		const anchor = activeDocument.createEl("a");
+		const anchor = activeDocument.body.createEl("a");
 		anchor.href = url;
 		anchor.download = fileName;
+		anchor.hidden = true;
 		anchor.click();
-		URL.revokeObjectURL(url);
+		window.setTimeout(() => {
+			anchor.remove();
+			URL.revokeObjectURL(url);
+		}, 1_000);
 	}
 
-	private async writeVectorsPreviewFile(fileName: string, raw: string): Promise<string> {
-		const vaultPath = normalizePath(fileName);
-		const existing = this.app.vault.getAbstractFileByPath(vaultPath);
-		if (existing instanceof TFile) {
-			await this.app.vault.modify(existing, raw);
-			return vaultPath;
-		}
-		if (existing) {
-			throw new Error(`Cannot write exported vectors to "${vaultPath}" because a folder already exists there.`);
-		}
-		await this.app.vault.create(vaultPath, raw);
-		return vaultPath;
-	}
 }
 
 function errorMessage(error: unknown): string {

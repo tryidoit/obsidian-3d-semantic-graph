@@ -38,9 +38,13 @@ export const DUPLICATE_SIMILARITY_THRESHOLD = 0.93;
 
 /** Pairwise scans are O(n²·d); above this node count we skip them to keep the UI responsive. */
 export const MAX_PAIRWISE_NODES = 3000;
+export const MAX_DUPLICATE_RESULTS = 500;
 
 export function cosineSimilarity(a: number[], b: number[]): number {
-	const length = Math.min(a.length, b.length);
+	if (a.length !== b.length) {
+		throw new Error(`Embedding dimension mismatch: ${a.length} and ${b.length}.`);
+	}
+	const length = a.length;
 	let dot = 0;
 	let normA = 0;
 	let normB = 0;
@@ -56,7 +60,12 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 function normalizeVectors(embeddings: Map<string, number[]>): { paths: string[]; vectors: Float64Array[] } {
 	const paths: string[] = [];
 	const vectors: Float64Array[] = [];
+	let dimensions = 0;
 	for (const [path, vector] of embeddings) {
+		if (dimensions === 0) dimensions = vector.length;
+		if (vector.length !== dimensions) {
+			throw new Error(`Embedding dimension mismatch for "${path}".`);
+		}
 		let norm = 0;
 		for (let i = 0; i < vector.length; i++) norm += vector[i] * vector[i];
 		norm = Math.sqrt(norm);
@@ -70,7 +79,10 @@ function normalizeVectors(embeddings: Map<string, number[]>): { paths: string[];
 }
 
 function dot(a: Float64Array, b: Float64Array): number {
-	const length = Math.min(a.length, b.length);
+	if (a.length !== b.length) {
+		throw new Error(`Embedding dimension mismatch: ${a.length} and ${b.length}.`);
+	}
+	const length = a.length;
 	let sum = 0;
 	for (let i = 0; i < length; i++) sum += a[i] * b[i];
 	return sum;
@@ -145,7 +157,7 @@ export async function computePairInsights(
 		for (let j = i + 1; j < paths.length; j++) {
 			const similarity = dot(vectors[i], vectors[j]);
 			if (similarity >= duplicateThreshold) {
-				duplicates.push({ a: paths[i], b: paths[j], similarity });
+				insertTopDuplicate(duplicates, paths[i], paths[j], similarity);
 			}
 			if (maxSuggestions > 0 && !linked.has(pairKey(paths[i], paths[j]))) {
 				let score = similarity;
@@ -161,8 +173,13 @@ export async function computePairInsights(
 				}
 				insertTopSuggestion(suggestions, maxSuggestions, paths[i], paths[j], similarity, score);
 			}
+			pairsDone++;
+			if (pairsDone % 64 === 0 && performance.now() - sliceStart > TIME_SLICE_MS) {
+				options.onProgress?.(pairsDone, totalPairs);
+				await yieldToEventLoop();
+				sliceStart = performance.now();
+			}
 		}
-		pairsDone += paths.length - 1 - i;
 
 		if (performance.now() - sliceStart > TIME_SLICE_MS) {
 			options.onProgress?.(pairsDone, totalPairs);
@@ -175,6 +192,25 @@ export async function computePairInsights(
 	suggestions.sort((a, b) => b.score - a.score);
 	duplicates.sort((a, b) => b.similarity - a.similarity);
 	return { suggestions, duplicates };
+}
+
+function insertTopDuplicate(duplicates: DuplicatePair[], a: string, b: string, similarity: number): void {
+	if (duplicates.length < MAX_DUPLICATE_RESULTS) {
+		duplicates.push({ a, b, similarity });
+		if (duplicates.length === MAX_DUPLICATE_RESULTS) {
+			duplicates.sort((left, right) => right.similarity - left.similarity);
+		}
+		return;
+	}
+	if (similarity <= duplicates[duplicates.length - 1].similarity) return;
+	duplicates[duplicates.length - 1] = { a, b, similarity };
+	let index = duplicates.length - 1;
+	while (index > 0 && duplicates[index].similarity > duplicates[index - 1].similarity) {
+		const previous = duplicates[index - 1];
+		duplicates[index - 1] = duplicates[index];
+		duplicates[index] = previous;
+		index--;
+	}
 }
 
 function jaccard(a: Set<string>, b: Set<string>): number {

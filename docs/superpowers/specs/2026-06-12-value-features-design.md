@@ -1,3 +1,7 @@
+# Historical design note (superseded)
+
+The Ollama and “standalone HTML” portions of this proposal are no longer current. Runtime providers are limited to OpenAI plus a disabled Anthropic/Claude reservation; external/local models are deferred behind the provider abstraction. HTML exports load their renderer from a CDN and therefore require internet access.
+
 # Value Features Design — Insights, Local Embeddings, Timeline, Export, Neighbors
 
 Date: 2026-06-12

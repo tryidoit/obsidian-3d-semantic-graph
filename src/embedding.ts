@@ -10,7 +10,7 @@ import {
 
 const CACHE_FILE = "embeddings-cache.json";
 const HASHES_FILE = "embeddings-hashes.json";
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const MAX_TOKENS_APPROX = 8000; // rough char limit (~4 chars per token)
 
 interface HashesFileData {
@@ -45,8 +45,32 @@ export class EmbeddingService {
 			if (await adapter.exists(path)) {
 				const data = await adapter.read(path);
 				const parsed = JSON.parse(data) as EmbeddingCache;
-				if (parsed.modelId === getEmbeddingCacheModelId(this.settings) && parsed.version === CACHE_VERSION) {
+				if (
+					parsed.modelId === getEmbeddingCacheModelId(this.settings)
+					&& parsed.version === CACHE_VERSION
+					&& parsed.entries
+					&& typeof parsed.entries === "object"
+				) {
 					this.cache = parsed;
+					let dimensions = 0;
+					let inconsistentDimensions = false;
+					for (const [entryPath, entry] of Object.entries(this.cache.entries)) {
+						if (
+							!entry
+							|| typeof entry.contentHash !== "string"
+							|| !Array.isArray(entry.embedding)
+							|| entry.embedding.length === 0
+							|| entry.embedding.some((value) => !Number.isFinite(value))
+						) {
+							delete this.cache.entries[entryPath];
+							continue;
+						}
+						if (dimensions === 0) dimensions = entry.embedding.length;
+						if (entry.embedding.length !== dimensions) inconsistentDimensions = true;
+					}
+					if (inconsistentDimensions) {
+						this.cache.entries = {};
+					}
 				} else {
 					this.cache = { modelId: getEmbeddingCacheModelId(this.settings), version: CACHE_VERSION, entries: {} };
 				}
@@ -88,6 +112,8 @@ export class EmbeddingService {
 			if (parsed.modelId !== getEmbeddingCacheModelId(this.settings) || parsed.version !== CACHE_VERSION) {
 				return null;
 			}
+			if (!parsed.hashes || typeof parsed.hashes !== "object" || Array.isArray(parsed.hashes)) return null;
+			if (Object.values(parsed.hashes).some((hash) => typeof hash !== "string")) return null;
 			return parsed.hashes;
 		} catch {
 			return null;
@@ -132,8 +158,9 @@ export class EmbeddingService {
 	async loadCachedEmbeddings(): Promise<Map<string, number[]>> {
 		await this.loadCache();
 		const result = new Map<string, number[]>();
+		const eligiblePaths = new Set(this.getEligibleFiles().map((file) => file.path));
 		for (const [path, entry] of Object.entries(this.cache.entries)) {
-			result.set(path, entry.embedding);
+			if (eligiblePaths.has(path)) result.set(path, entry.embedding);
 		}
 		return result;
 	}
@@ -190,7 +217,10 @@ export class EmbeddingService {
 
 		for (let i = 0; i < toEmbed.length; i += adapter.batchSize) {
 			const batch = toEmbed.slice(i, i + adapter.batchSize);
-			const embeddings = await adapter.embed(batch.map((item) => item.text));
+			const embeddings = await adapter.embed(
+				batch.map((item) => item.text),
+				{ inputType: "document" }
+			);
 
 			for (let j = 0; j < batch.length; j++) {
 				const { file, contentHash } = batch[j];
@@ -205,9 +235,10 @@ export class EmbeddingService {
 
 			completed += batch.length;
 			onProgress?.(completed, total);
+			// Persist each completed provider batch. A later rate-limit or network
+			// failure should not make users pay to regenerate successful work.
+			await this.saveCache();
 		}
-
-		await this.saveCache();
 		return result;
 	}
 
@@ -253,11 +284,13 @@ export class EmbeddingService {
 	}
 
 	private hashContent(content: string): string {
-		let hash = 0;
+		let hashA = 2166136261;
+		let hashB = 0x9e3779b9;
 		for (let i = 0; i < content.length; i++) {
 			const char = content.charCodeAt(i);
-			hash = ((hash << 5) - hash + char) | 0;
+			hashA = Math.imul(hashA ^ char, 16777619);
+			hashB = Math.imul(hashB ^ char, -2048144789);
 		}
-		return hash.toString(36);
+		return `${(hashA >>> 0).toString(36)}:${(hashB >>> 0).toString(36)}`;
 	}
 }

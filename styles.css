@@ -110,6 +110,7 @@
 	flex: 1;
 	min-width: 0;
 	position: relative;
+	overflow: hidden;
 }
 
 .semantic-graph-stage.semantic-graph-theme-dark {
@@ -159,10 +160,16 @@
 .semantic-graph-insights {
 	width: 320px;
 	flex-shrink: 0;
-	display: flex;
+	display: none;
 	flex-direction: column;
+	position: relative;
+	z-index: 1;
 	border-left: 1px solid var(--background-modifier-border);
 	background: var(--background-primary);
+}
+
+.semantic-graph-insights.is-open {
+	display: flex;
 }
 
 .semantic-graph-insights-header {
@@ -418,6 +425,7 @@
 
 .semantic-graph-search-result {
 	display: flex;
+	width: 100%;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
@@ -425,10 +433,21 @@
 	border-radius: 4px;
 	cursor: pointer;
 	font-size: 13px;
+	font-family: inherit;
+	color: var(--text-normal);
+	background: transparent;
+	border: 0;
+	text-align: left;
 }
 
-.semantic-graph-search-result:hover {
+.semantic-graph-search-result:hover,
+.semantic-graph-search-result:focus-visible {
 	background: var(--background-modifier-hover);
+}
+
+.semantic-graph-setting-warning {
+	border-left: 3px solid var(--color-orange);
+	padding-left: 12px;
 }
 
 .semantic-graph-search-result-name {

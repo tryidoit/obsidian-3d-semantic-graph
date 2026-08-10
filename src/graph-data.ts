@@ -70,5 +70,6 @@ function getGroupKey(app: App, file: TFile, colorBy: "folder" | "tag"): string {
 		}
 		return "(untagged)";
 	}
-	return file.parent?.path || "/";
+	const parentPath = file.parent?.path || "/";
+	return parentPath === "/" ? "/" : parentPath.split("/")[0] || "/";
 }
