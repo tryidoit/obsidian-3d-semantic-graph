@@ -1,3 +1,4 @@
+import { ensureDataDir } from "./data-dir";
 import {
 	App,
 	Notice,
@@ -11,12 +12,14 @@ import {
 	clonePluginSettings,
 	canGenerateProviderEmbeddings,
 	createDefaultSettings,
+	DEFAULT_DATA_FOLDER,
 	EMBEDDING_PROVIDER_CAPABILITIES,
 	EMBEDDING_PROVIDER_LABELS,
 	EmbeddingProvider,
 	generateRandomLayoutSeed,
 	getDefaultEmbeddingModel,
 	isPathExcluded,
+	normalizeDataFolder,
 	PluginSettings,
 	PRESET_EMBEDDING_MODELS,
 } from "./types";
@@ -68,6 +71,21 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 								en: "English",
 								ko: "한국어",
 							},
+						},
+					},
+					{
+						name: t("settings.dataFolder.name"),
+						desc: t("settings.dataFolder.desc"),
+						render: (setting: Setting) => {
+							setting.addText((text) => {
+								text
+									.setPlaceholder(DEFAULT_DATA_FOLDER)
+									.setValue(this.plugin.settings.dataFolder);
+								// Apply on blur/enter, not per keystroke: changing it moves files.
+								text.inputEl.addEventListener("change", () => {
+									void this.patchSettings({ dataFolder: normalizeDataFolder(text.getValue()) });
+								});
+							});
 						},
 					},
 				],
@@ -511,8 +529,10 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 			try {
 				const raw = await file.text();
 				parseUploadedVectorsJson(raw);
-				const path = `${this.plugin.manifest.dir!}/${UPLOADED_VECTORS_FILE}`;
+				const path = `${this.plugin.getDataDir()}/${UPLOADED_VECTORS_FILE}`;
+				await ensureDataDir(this.app, this.plugin.getDataDir());
 				await this.app.vault.adapter.write(path, raw);
+				this.plugin.markVectorsWritten(raw);
 				await this.patchSettings({
 					uploadedVectorsFileName: file.name,
 					uploadedVectorsRevision: this.plugin.settings.uploadedVectorsRevision + 1,
@@ -530,7 +550,7 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 
 	private async exportVectorsJson(): Promise<void> {
 		try {
-			const uploadedPath = `${this.plugin.manifest.dir}/${UPLOADED_VECTORS_FILE}`;
+			const uploadedPath = `${this.plugin.getDataDir()}/${UPLOADED_VECTORS_FILE}`;
 			const adapter = this.app.vault.adapter;
 			let raw: string;
 			let fileName: string;
@@ -546,7 +566,7 @@ export class SemanticGraphSettingTab extends PluginSettingTab {
 				const canGenerate = canGenerateProviderEmbeddings(s);
 				if (canGenerate) {
 					new Notice(t("notice.vectorsGenerating"));
-					const service = new EmbeddingService(this.app, this.plugin.settings, this.plugin.manifest.dir!);
+					const service = new EmbeddingService(this.app, this.plugin.settings, this.plugin.getDataDir());
 					const embeddings = await service.getEmbeddings();
 					raw = serializeUploadedVectors(embeddings.entries(), {
 						provider: s.embeddingProvider,

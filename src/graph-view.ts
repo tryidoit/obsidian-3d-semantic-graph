@@ -1,4 +1,5 @@
 import { ItemView, Notice, TFile, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
+import { getDataDir } from "./data-dir";
 import {
 	canGenerateEmbeddings,
 	canGenerateQueryEmbeddings,
@@ -311,6 +312,7 @@ export class SemanticGraphView extends ItemView {
 	}
 
 	updateSettings(settings: PluginSettings): void {
+		this.pluginDir = getDataDir(settings);
 		const previous = this.settings;
 		this.settings = clonePluginSettings(settings);
 		this.renderer?.setLinksVisible(this.settings.showLinks);

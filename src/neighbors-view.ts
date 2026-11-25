@@ -1,4 +1,5 @@
 import { ItemView, TFile, WorkspaceLeaf, setIcon, setTooltip } from "obsidian";
+import { getDataDir } from "./data-dir";
 import { computeNeighbors, NeighborEntry } from "./insights";
 import { GraphData, GraphNode, GraphVisualOptions, isPathExcluded, PluginSettings } from "./types";
 import { t } from "./i18n";
@@ -80,11 +81,13 @@ export class NeighborsView extends ItemView {
 	}
 
 	updateSettings(settings: PluginSettings): void {
+		this.pluginDir = getDataDir(settings);
 		const previous = this.settings;
 		this.settings = settings;
 		const vectorSourceChanged = previous.embeddingProvider !== settings.embeddingProvider
 			|| previous.embeddingModel !== settings.embeddingModel
 			|| previous.embeddingApiKey !== settings.embeddingApiKey
+			|| previous.dataFolder !== settings.dataFolder
 			|| previous.uploadedVectorsFileName !== settings.uploadedVectorsFileName
 			|| previous.uploadedVectorsRevision !== settings.uploadedVectorsRevision
 			|| previous.excludeFolders.join("\n") !== settings.excludeFolders.join("\n");

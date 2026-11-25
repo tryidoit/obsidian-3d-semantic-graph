@@ -12,11 +12,22 @@ export const GRAPH_GROUP_COLORS: readonly string[] = [
 	"#ef4444", "#22c55e", "#3b82f6", "#f97316", "#06b6d4",
 ];
 
+/** Vault-relative folder (synced with the vault, e.g. via iCloud) that holds all graph data. */
+export const DEFAULT_DATA_FOLDER = "_semantic-graph";
+
+export function normalizeDataFolder(input: unknown): string {
+	if (typeof input !== "string") return DEFAULT_DATA_FOLDER;
+	const parts = input.replace(/\\/g, "/").split("/").map((p) => p.trim()).filter((p) => p && p !== ".");
+	if (parts.length === 0 || parts.includes("..")) return DEFAULT_DATA_FOLDER;
+	return parts.join("/");
+}
+
 export interface PluginSettings {
 	language: "auto" | "en" | "ko";
 	embeddingProvider: EmbeddingProvider;
 	embeddingApiKey: string;
 	embeddingModel: string;
+	dataFolder: string;
 	uploadedVectorsFileName: string;
 	uploadedVectorsRevision: number;
 	suggestedLinkCount: number;
@@ -50,6 +61,7 @@ export function createDefaultSettings(): PluginSettings {
 		embeddingProvider: "openai",
 		embeddingApiKey: "",
 		embeddingModel: "text-embedding-3-large",
+		dataFolder: DEFAULT_DATA_FOLDER,
 		uploadedVectorsFileName: "",
 		uploadedVectorsRevision: 0,
 		suggestedLinkCount: 20,
@@ -93,6 +105,7 @@ export function sanitizePluginSettings(input: unknown): PluginSettings {
 		embeddingProvider: provider,
 		embeddingApiKey: typeof raw.embeddingApiKey === "string" ? raw.embeddingApiKey.trim() : "",
 		embeddingModel: isPresetEmbeddingModel(provider, model) ? model : getDefaultEmbeddingModel(provider),
+		dataFolder: normalizeDataFolder(raw.dataFolder),
 		uploadedVectorsFileName: typeof raw.uploadedVectorsFileName === "string" ? raw.uploadedVectorsFileName : "",
 		uploadedVectorsRevision: boundedNumber(
 			raw.uploadedVectorsRevision,

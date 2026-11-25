@@ -455,3 +455,21 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+/* Touch devices (iOS/iPadOS): larger tap targets, no page scroll/zoom while orbiting */
+@media (pointer: coarse) {
+	.semantic-graph-canvas,
+	.semantic-graph-stage,
+	.semantic-graph-canvas canvas {
+		touch-action: none;
+		-webkit-user-select: none;
+		user-select: none;
+	}
+	.semantic-graph-btn,
+	.semantic-graph-icon-btn,
+	.semantic-graph-icon-pair-btn,
+	.semantic-graph-clusters-btn {
+		min-height: 40px;
+		min-width: 40px;
+	}
+}

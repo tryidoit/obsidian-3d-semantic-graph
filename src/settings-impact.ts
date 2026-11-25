@@ -5,6 +5,7 @@ export function settingsRequireGraphReload(previous: PluginSettings, next: Plugi
 	return previous.embeddingProvider !== next.embeddingProvider
 		|| previous.embeddingApiKey !== next.embeddingApiKey
 		|| previous.embeddingModel !== next.embeddingModel
+		|| previous.dataFolder !== next.dataFolder
 		|| previous.uploadedVectorsFileName !== next.uploadedVectorsFileName
 		|| previous.uploadedVectorsRevision !== next.uploadedVectorsRevision
 		|| previous.projectionMethod !== next.projectionMethod

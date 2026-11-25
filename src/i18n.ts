@@ -138,6 +138,11 @@ const STRINGS = {
 
 	// Settings — general
 	"settings.general.heading": { en: "General", ko: "일반" },
+	"settings.dataFolder.name": { en: "Data folder", ko: "데이터 폴더" },
+	"settings.dataFolder.desc": {
+		en: "Vault folder for vectors and caches. Syncs with your vault (iCloud, Obsidian Sync) and is readable by the Claude MCP server. Existing data is moved when you change it.",
+		ko: "벡터와 캐시를 저장하는 볼트 폴더입니다. 볼트와 함께 동기화되며 Claude MCP 서버가 읽을 수 있습니다. 변경하면 기존 데이터가 이동됩니다.",
+	},
 	"settings.language.name": { en: "Language", ko: "언어" },
 	"settings.language.desc": {
 		en: "Plugin interface language. Auto follows the Obsidian language. Reopen views to apply everywhere.",

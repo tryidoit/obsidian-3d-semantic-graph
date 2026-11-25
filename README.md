@@ -163,3 +163,19 @@ Pairwise insights are capped at 3,000 embedded notes and duplicate results are b
 ## License
 
 MIT
+
+## iOS / iPadOS, vault sync, and Claude access (fork additions)
+
+- **Mobile**: `isDesktopOnly` is `false`; all file I/O goes through Obsidian's vault adapter, with larger touch targets.
+- **Vault-folder storage**: vectors and caches live in `<vault>/_semantic-graph/` (Settings → Data folder) instead of `.obsidian/plugins/`, so an iCloud-synced vault carries them to every device. Old plugin-folder data is migrated automatically.
+- **Auto-reload**: when `uploaded-vectors.json` in that folder changes (Claude, sync, another device) the graph refreshes — no manual upload.
+- **Claude MCP server** (`mcp/server.mjs`, no dependencies). Add next to your Obsidian server in `claude_desktop_config.json`:
+
+```json
+"semantic-graph": {
+  "command": "node",
+  "args": ["/path/to/obsidian-3d-semantic-graph/mcp/server.mjs", "--vault", "/Users/you/Library/Mobile Documents/iCloud~md~obsidian/Documents/Connection Vault"]
+}
+```
+
+Tools: `semantic_graph_status`, `_list_notes`, `_set_vectors`, `_remove_vectors`, `_neighbors`, `_get_clusters`.
