@@ -4,9 +4,11 @@
 
 ![753개 노트 볼트의 3D 시맨틱 그래프, 폴더별 색상](images/graph-overview.png)
 
-Obsidian 데스크톱 전용 플러그인으로, 노트를 인터랙티브 3D 공간에 시각화합니다. OpenAI 임베딩 또는 검증된 업로드 벡터를 UMAP/PCA로 3차원에 투영하여 의미적으로 가까운 노트를 가깝게 배치합니다. 임베딩이 없으면 폴더 기반 클러스터 구형 레이아웃과 ConvexHull 클러스터 영역을 표시합니다.
+Obsidian 플러그인(데스크톱 및 iOS/iPadOS 지원)으로, 노트를 인터랙티브 3D 공간에 시각화합니다. OpenAI 임베딩 또는 검증된 업로드 벡터를 UMAP/PCA로 3차원에 투영하여 의미적으로 가까운 노트를 가깝게 배치합니다. 임베딩이 없으면 폴더 기반 클러스터 구형 레이아웃과 ConvexHull 클러스터 영역을 표시합니다.
 
 [English](../README.md)
+
+> **포크 추가 기능:** iOS/iPadOS 지원, 볼트 내부 `_semantic-graph/` 폴더에 데이터 저장(iCloud 등으로 동기화), Claude Desktop MCP 서버(`mcp/server.mjs`). 자세한 내용은 [영문 README](../README.md#claude-desktop-integration)를 참고하세요.
 
 ## 주요 기능
 
@@ -54,7 +56,7 @@ Obsidian 데스크톱 전용 플러그인으로, 노트를 인터랙티브 3D �
 
 ## 설치
 
-Obsidian **1.11.0 이상** 필요 (데스크톱 전용).
+Obsidian **1.11.0 이상** 필요 (데스크톱, iOS, iPadOS).
 
 ### 커뮤니티 플러그인
 

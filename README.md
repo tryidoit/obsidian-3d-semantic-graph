@@ -4,12 +4,17 @@
 
 ![3D semantic graph of a 753-note vault, colored by folder](docs/images/graph-overview.png)
 
-Desktop-only Obsidian plugin that visualizes your notes in an interactive 3D space. Notes are positioned using OpenAI embeddings or validated uploaded vectors projected into 3D via UMAP or PCA, so semantically related notes cluster together. Without embeddings, the plugin uses a folder-based clustered sphere layout with ConvexHull cluster regions.
+Obsidian plugin (desktop and iOS/iPadOS) that visualizes your notes in an interactive 3D space. Notes are positioned using OpenAI embeddings or validated uploaded vectors projected into 3D via UMAP or PCA, so semantically related notes cluster together. Without embeddings, the plugin uses a folder-based clustered sphere layout with ConvexHull cluster regions.
+
+> **This fork adds:** iOS/iPadOS support, graph data stored inside your vault (so iCloud / Obsidian Sync carries it to every device), and an MCP server that lets Claude Desktop read and write the graph data directly — no more downloading a file and uploading it by hand. See [Claude Desktop integration](#claude-desktop-integration).
 
 [Korean](./docs/README_KO.md)
 
 ## Features
 
+- **iOS / iPadOS support** *(fork)* — no longer desktop-only; touch-friendly controls, all file access through Obsidian's vault API
+- **Vault-synced data folder** *(fork)* — vectors, caches and layout live in `<vault>/_semantic-graph/` instead of the plugin folder, so they sync with the vault
+- **Claude Desktop integration** *(fork)* — bundled MCP server lets Claude write vectors, list notes, query neighbors and read clusters; the graph auto-refreshes when the vectors file changes
 - **Semantic 3D layout** — OpenAI embeddings or uploaded vectors reduced to 3D coordinates via UMAP or PCA
 - **Semantic search** — search by meaning from the toolbar; the top matches are highlighted in the graph and the camera flies to the best one
 - **Auto-labeled semantic clusters** — cluster regions grouped by embedding similarity (k-means) with topic labels generated from note titles and tags (e.g. "space · astronomy · telescope"); switchable back to folder grouping
@@ -54,7 +59,7 @@ Uploaded vectors remain available independently of provider generation. Semantic
 
 ## Installation
 
-Requires Obsidian **1.11.0 or newer** (desktop only).
+Requires Obsidian **1.11.0 or newer** (desktop, iOS and iPadOS). The WebGL graph runs on mobile but is heavier on large vaults.
 
 ### Community plugins
 
@@ -115,6 +120,7 @@ The distributable files are `main.js`, `manifest.json`, and `styles.css`. Develo
 | Embedding Provider | OpenAI, or the disabled Anthropic/Claude reservation | `openai` |
 | API Key | OpenAI API key for embedding generation | Empty |
 | Embedding Model | Embedding model for the selected provider | `text-embedding-3-large` |
+| Data Folder | Vault folder for vectors and caches (synced with the vault; existing data moves when changed) | `_semantic-graph` |
 | Custom Vector JSON | Upload/export vector JSON instead of API embeddings | Empty |
 | Projection Method | UMAP or PCA for dimensionality reduction | `umap` |
 | Layout Seed | Seed for deterministic layout | Random |
@@ -142,11 +148,11 @@ The distributable files are `main.js`, `manifest.json`, and `styles.css`. Develo
 - `embeddings-hashes.json` — lightweight content-hash index used to validate the vault without parsing the full vector cache
 - `layout-cache.json` — computed 3D coordinates and semantic clusters; reused when nothing changed so reopening skips UMAP/PCA entirely
 
-All three live in the plugin directory and rebuild automatically when stale.
+All of these (plus `uploaded-vectors.json`) live in the **data folder** (`<vault>/_semantic-graph/` by default) and rebuild automatically when stale. Data from older versions in the plugin directory is copied over on first launch.
 
 ## Privacy and vector format
 
-When OpenAI generation is enabled, cleaned note text and semantic search queries are sent to the selected OpenAI embedding model. The API key is stored in Obsidian's local plugin settings; embeddings and layout caches remain in the local plugin directory. Uploaded vector JSON is validated for finite values, consistent dimensions, and paths that exist in the current graph before it is accepted.
+When OpenAI generation is enabled, cleaned note text and semantic search queries are sent to the selected OpenAI embedding model. The API key is stored in Obsidian's local plugin settings; embeddings and layout caches remain in your vault's data folder (they sync wherever your vault syncs, e.g. iCloud). The API key stays in the plugin settings under `.obsidian`. Uploaded vector JSON is validated for finite values, consistent dimensions, and paths that exist in the current graph before it is accepted.
 
 Exports include `provider`, `model`, and `dimensions` metadata plus an `entries` object keyed by exact vault-relative Markdown paths. Vector export downloads a file and does not create or overwrite a note in the vault.
 
@@ -164,18 +170,39 @@ Pairwise insights are capped at 3,000 embedded notes and duplicate results are b
 
 MIT
 
-## iOS / iPadOS, vault sync, and Claude access (fork additions)
+## Claude Desktop integration
 
-- **Mobile**: `isDesktopOnly` is `false`; all file I/O goes through Obsidian's vault adapter, with larger touch targets.
-- **Vault-folder storage**: vectors and caches live in `<vault>/_semantic-graph/` (Settings → Data folder) instead of `.obsidian/plugins/`, so an iCloud-synced vault carries them to every device. Old plugin-folder data is migrated automatically.
-- **Auto-reload**: when `uploaded-vectors.json` in that folder changes (Claude, sync, another device) the graph refreshes — no manual upload.
-- **Claude MCP server** (`mcp/server.mjs`, no dependencies). Add next to your Obsidian server in `claude_desktop_config.json`:
+The plugin watches `<vault>/_semantic-graph/uploaded-vectors.json`. Whenever that file changes — written by Claude, synced from another device, or replaced by hand — the graph reloads on its own. `mcp/server.mjs` is a dependency-free [MCP](https://modelcontextprotocol.io) server that gives Claude Desktop direct access to that folder.
+
+Add it to `claude_desktop_config.json` alongside your Obsidian server (requires Node.js), then restart Claude Desktop:
 
 ```json
-"semantic-graph": {
-  "command": "node",
-  "args": ["/path/to/obsidian-3d-semantic-graph/mcp/server.mjs", "--vault", "/Users/you/Library/Mobile Documents/iCloud~md~obsidian/Documents/Connection Vault"]
+{
+  "mcpServers": {
+    "semantic-graph": {
+      "command": "node",
+      "args": [
+        "/path/to/obsidian-3d-semantic-graph/mcp/server.mjs",
+        "--vault", "/Users/you/Library/Mobile Documents/iCloud~md~obsidian/Documents/Your Vault"
+      ]
+    }
+  }
 }
 ```
 
-Tools: `semantic_graph_status`, `_list_notes`, `_set_vectors`, `_remove_vectors`, `_neighbors`, `_get_clusters`.
+Optional: `--folder <name>` if you changed the plugin's Data folder.
+
+| Tool | What it does |
+| --- | --- |
+| `semantic_graph_status` | Where the data lives, notes with/without vectors, dimensions, whether a layout exists |
+| `semantic_graph_list_notes` | Paginated note paths with excerpts; `onlyMissing` lists notes still needing vectors |
+| `semantic_graph_set_vectors` | Merge vectors into `uploaded-vectors.json` (validated, atomic write) |
+| `semantic_graph_remove_vectors` | Delete vectors by path or drop stale ones for deleted notes |
+| `semantic_graph_neighbors` | Closest notes to a note by cosine similarity |
+| `semantic_graph_get_clusters` | Clusters and coordinates last computed by the plugin (open the graph once first) |
+
+The server does not generate embeddings itself — Claude (or any caller) supplies the vectors.
+
+## iOS / iPadOS
+
+Install the plugin in a vault synced by iCloud or Obsidian Sync and enable community plugins on the device. Because data now lives in the vault, vectors computed on your Mac or written by Claude Desktop appear on your iPhone/iPad without any upload step. Use **Open graph view** from the ribbon or command palette. Note: not yet tested on real iOS devices — please report issues.
